@@ -13,6 +13,23 @@ import {
 import { toast } from "sonner";
 import { useInternetIdentity } from "../hooks/useInternetIdentity";
 
+// ── Global Google Identity Services type declarations ──────────────────────
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize: (config: object) => void;
+          prompt: (callback?: (notification: unknown) => void) => void;
+          renderButton: (element: HTMLElement, config: object) => void;
+          disableAutoSelect: () => void;
+        };
+      };
+    };
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 type AuthStep = "options" | "mobile_phone" | "mobile_otp" | "google_picker";
 
 // ── OTP single-cell input ─────────────────────────────────────────────────────
@@ -88,72 +105,95 @@ function OtpCell({
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Fake Google accounts kept for demo mode only
 const GOOGLE_ACCOUNTS = [
   { name: "Priya Sharma", email: "priya.sharma@gmail.com", avatar: "PS" },
   { name: "Rahul Kumar", email: "rahul.kumar@gmail.com", avatar: "RK" },
   { name: "Anita Patel", email: "anita.patel@gmail.com", avatar: "AP" },
 ];
 
-// ── SMS OTP helpers ───────────────────────────────────────────────────────────
+// ── MSG91 Widget helpers ──────────────────────────────────────────────────────
 function generateDemoOtp(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-async function sendOtpViaSms(phone: string): Promise<{ demoMode: boolean }> {
-  const apiKey = localStorage.getItem("fooddash_sms_api_key");
-  const templateId = localStorage.getItem("fooddash_sms_template_id");
-
-  if (!apiKey) {
-    // Demo mode: store OTP in sessionStorage
-    const demoOtp = generateDemoOtp();
-    sessionStorage.setItem(`otp_${phone}`, demoOtp);
-    return { demoMode: true };
-  }
-
-  // Real MSG91 call
-  const response = await fetch("https://api.msg91.com/api/v5/otp", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      template_id: templateId ?? "",
-      mobile: `91${phone}`,
-      authkey: apiKey,
-    }),
+function loadMsg91Script(): Promise<void> {
+  return new Promise((resolve) => {
+    if (document.getElementById("msg91-otp-script")) {
+      resolve();
+      return;
+    }
+    const s = document.createElement("script");
+    s.id = "msg91-otp-script";
+    s.src = "https://verify.msg91.com/otp-provider.js";
+    s.onload = () => resolve();
+    document.head.appendChild(s);
   });
-
-  if (!response.ok) {
-    throw new Error("Failed to send OTP via MSG91");
-  }
-
-  const data = await response.json();
-  if (data.type !== "success") {
-    throw new Error(data.message ?? "OTP sending failed");
-  }
-
-  return { demoMode: false };
 }
 
-async function verifyOtpViaSms(phone: string, otp: string): Promise<boolean> {
-  const apiKey = localStorage.getItem("fooddash_sms_api_key");
+// ── Google Identity Services helpers ─────────────────────────────────────────
+function loadGsiScript(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (document.getElementById("gsi-client-script")) {
+      resolve();
+      return;
+    }
+    const s = document.createElement("script");
+    s.id = "gsi-client-script";
+    s.src = "https://accounts.google.com/gsi/client";
+    s.async = true;
+    s.defer = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("Failed to load GSI script"));
+    document.head.appendChild(s);
+  });
+}
 
-  if (!apiKey) {
-    // Demo mode: compare with stored OTP
-    const stored = sessionStorage.getItem(`otp_${phone}`);
-    return stored === otp;
+interface GoogleJwtPayload {
+  name?: string;
+  email?: string;
+  picture?: string;
+  sub?: string;
+}
+
+function decodeGoogleJwt(token: string): GoogleJwtPayload {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return {};
+    const payload = parts[1];
+    // Base64url decode
+    const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64.padEnd(
+      base64.length + ((4 - (base64.length % 4)) % 4),
+      "=",
+    );
+    return JSON.parse(atob(padded)) as GoogleJwtPayload;
+  } catch {
+    return {};
   }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
-  // Real MSG91 verify call
-  const url = `https://api.msg91.com/api/v5/otp/verify?otp=${encodeURIComponent(otp)}&mobile=91${encodeURIComponent(phone)}&authkey=${encodeURIComponent(apiKey)}`;
-  const response = await fetch(url);
-
+async function verifyAccessTokenWithMsg91(
+  authKey: string,
+  accessToken: string,
+): Promise<boolean> {
+  const response = await fetch(
+    "https://control.msg91.com/api/v5/widget/verifyAccessToken",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        authkey: authKey,
+        "access-token": accessToken,
+      }),
+    },
+  );
   if (!response.ok) {
-    throw new Error("Verification request failed");
+    throw new Error("Token verification request failed");
   }
-
   const data = await response.json();
-  return data.type === "success";
+  return (data as { type?: string }).type === "success";
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -173,16 +213,64 @@ export function AuthScreen() {
   ]);
   const [isSendingOtp, setIsSendingOtp] = useState(false);
   const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
-  const [isDemoMode, setIsDemoMode] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);
-  const [googleAccount, setGoogleAccount] = useState<
-    (typeof GOOGLE_ACCOUNTS)[0] | null
-  >(null);
+  const [widgetAccessToken, setWidgetAccessToken] = useState<string | null>(
+    null,
+  );
+  const [googleAccount, setGoogleAccount] = useState<{
+    name: string;
+    email: string;
+    avatar: string;
+    picture?: string;
+  } | null>(null);
+
+  // Google OAuth state (real mode)
+  const [gsiLoading, setGsiLoading] = useState(false);
+  const [gsiReady, setGsiReady] = useState(false);
+  const [gsiSigningIn, setGsiSigningIn] = useState(false);
+
   const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
   const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Derived: joined OTP string for validation
   const otp = otpDigits.join("");
+
+  // Widget mode: both API key and widget ID configured
+  const isWidgetMode =
+    !!localStorage.getItem("fooddash_sms_api_key") &&
+    !!localStorage.getItem("fooddash_msg91_widget_id");
+
+  // Google OAuth: real mode when client ID is configured
+  const googleClientId =
+    localStorage.getItem("fooddash_google_client_id") ?? "";
+  const isGoogleRealMode = !!googleClientId;
+
+  // handleGoogleCredentialResponse declared before the effect that uses it
+  const handleGoogleCredentialResponse = useCallback(
+    (response: { credential: string }) => {
+      const payload = decodeGoogleJwt(response.credential);
+      const name = payload.name ?? "Google User";
+      const email = payload.email ?? "";
+      const picture = payload.picture;
+      const initials = name
+        .split(" ")
+        .map((p) => p[0])
+        .join("")
+        .toUpperCase()
+        .slice(0, 2);
+
+      setGsiSigningIn(true);
+      setGoogleAccount({ name, email, avatar: initials, picture });
+
+      // Save email for profile display
+      if (email) localStorage.setItem("fooddash_login_email", email);
+      localStorage.removeItem("fooddash_login_phone");
+
+      toast.success(`Signing in as ${name}...`);
+      setTimeout(() => login(), 800);
+    },
+    [login],
+  );
 
   // Focus first OTP cell when OTP step mounts
   useEffect(() => {
@@ -191,12 +279,57 @@ export function AuthScreen() {
     }
   }, [step]);
 
+  // When google_picker step mounts in real mode, load GSI and initialize
+  useEffect(() => {
+    if (step !== "google_picker" || !isGoogleRealMode) return;
+
+    setGsiLoading(true);
+    setGsiReady(false);
+    setGsiSigningIn(false);
+
+    loadGsiScript()
+      .then(() => {
+        if (!window.google) {
+          throw new Error("Google GSI not available after script load");
+        }
+        window.google.accounts.id.initialize({
+          client_id: googleClientId,
+          callback: handleGoogleCredentialResponse,
+          ux_mode: "popup",
+          context: "signin",
+        });
+        setGsiReady(true);
+        setGsiLoading(false);
+        // Auto-prompt One-Tap
+        window.google.accounts.id.prompt((notification) => {
+          const n = notification as {
+            isNotDisplayed?: () => boolean;
+            isSkippedMoment?: () => boolean;
+          };
+          if (n.isNotDisplayed?.() || n.isSkippedMoment?.()) {
+            // One-Tap was not shown or skipped — user can click the button manually
+          }
+        });
+      })
+      .catch((err) => {
+        console.error("GSI load error:", err);
+        toast.error("Google Sign-In unavailable, falling back to demo mode");
+        setGsiLoading(false);
+        setGsiReady(false);
+      });
+  }, [step, isGoogleRealMode, googleClientId, handleGoogleCredentialResponse]);
+
   // Cleanup cooldown interval on unmount
   useEffect(() => {
     return () => {
       if (cooldownRef.current) clearInterval(cooldownRef.current);
     };
   }, []);
+
+  const handleGsiPrompt = () => {
+    if (!window.google || !gsiReady) return;
+    window.google.accounts.id.prompt();
+  };
 
   const startResendCooldown = useCallback(() => {
     setResendCooldown(RESEND_COOLDOWN);
@@ -219,14 +352,38 @@ export function AuthScreen() {
     }
     setIsSendingOtp(true);
     try {
-      const { demoMode } = await sendOtpViaSms(phone);
-      setIsDemoMode(demoMode);
-      setStep("mobile_otp");
-      startResendCooldown();
-      if (demoMode) {
-        toast.success(`OTP sent to +91 ${phone.slice(-10)} (demo mode)`);
+      if (isWidgetMode) {
+        const authKey = localStorage.getItem("fooddash_sms_api_key")!;
+        const wId = localStorage.getItem("fooddash_msg91_widget_id")!;
+        await loadMsg91Script();
+        setStep("mobile_otp");
+        // Slight delay to let the step transition render before widget overlay
+        setTimeout(() => {
+          (
+            window as unknown as { initSendOTP: (opts: unknown) => void }
+          ).initSendOTP({
+            widgetId: wId,
+            tokenAuth: authKey,
+            identifier: `91${phone}`,
+            success: (data: { "access-token": string }) => {
+              const token = data["access-token"];
+              setWidgetAccessToken(token);
+              toast.success("OTP verified by widget! Confirming login...");
+              verifyWithWidgetToken(authKey, token);
+            },
+            failure: (err: unknown) => {
+              console.error("MSG91 widget error", err);
+              toast.error("OTP verification failed. Please try again.");
+              setStep("mobile_phone");
+            },
+          });
+        }, 200);
       } else {
-        toast.success(`OTP sent to +91 ${phone.slice(-10)}`);
+        // Demo mode: store OTP in sessionStorage
+        const demoOtp = generateDemoOtp();
+        sessionStorage.setItem(`otp_${phone}`, demoOtp);
+        setStep("mobile_otp");
+        startResendCooldown();
       }
     } catch {
       toast.error("Failed to send OTP. Please try again.");
@@ -235,12 +392,35 @@ export function AuthScreen() {
     }
   };
 
+  const verifyWithWidgetToken = async (authKey: string, token: string) => {
+    setIsVerifyingOtp(true);
+    try {
+      const isValid = await verifyAccessTokenWithMsg91(authKey, token);
+      if (!isValid) {
+        toast.error("Access token verification failed. Please try again.");
+        setStep("mobile_phone");
+        return;
+      }
+      toast.success("Identity confirmed! Signing in...");
+      // Save mobile number for profile display (widget mode)
+      localStorage.setItem("fooddash_login_phone", `+91${phone}`);
+      localStorage.removeItem("fooddash_login_email");
+      login();
+    } catch {
+      toast.error("Verification failed. Please try again.");
+      setStep("mobile_phone");
+    } finally {
+      setIsVerifyingOtp(false);
+    }
+  };
+
   const handleResendOtp = async () => {
     if (resendCooldown > 0) return;
     setIsSendingOtp(true);
     try {
-      const { demoMode } = await sendOtpViaSms(phone);
-      setIsDemoMode(demoMode);
+      // Demo mode only — widget handles resend internally
+      const demoOtp = generateDemoOtp();
+      sessionStorage.setItem(`otp_${phone}`, demoOtp);
       startResendCooldown();
       setOtpDigits(["", "", "", "", "", ""]);
       setTimeout(() => otpRefs.current[0]?.focus(), 80);
@@ -259,16 +439,18 @@ export function AuthScreen() {
     }
     setIsVerifyingOtp(true);
     try {
-      const isValid = await verifyOtpViaSms(phone, otp);
+      // Demo mode: compare with sessionStorage
+      const stored = sessionStorage.getItem(`otp_${phone}`);
+      const isValid = stored === otp;
       if (!isValid) {
         toast.error("Invalid OTP. Please check and try again.");
         return;
       }
-      // Clean up demo OTP from sessionStorage
-      if (isDemoMode) {
-        sessionStorage.removeItem(`otp_${phone}`);
-      }
+      sessionStorage.removeItem(`otp_${phone}`);
       toast.success("OTP verified! Connecting...");
+      // Save mobile number for profile display
+      localStorage.setItem("fooddash_login_phone", `+91${phone}`);
+      localStorage.removeItem("fooddash_login_email");
       login();
     } catch {
       toast.error("Verification failed. Please try again.");
@@ -277,8 +459,24 @@ export function AuthScreen() {
     }
   };
 
-  const handleGoogleLogin = (account: (typeof GOOGLE_ACCOUNTS)[0]) => {
+  const handleManualWidgetVerify = async () => {
+    if (!widgetAccessToken) {
+      toast.error(
+        "No access token available. Please complete the widget flow.",
+      );
+      return;
+    }
+    const authKey = localStorage.getItem("fooddash_sms_api_key");
+    if (!authKey) return;
+    await verifyWithWidgetToken(authKey, widgetAccessToken);
+  };
+
+  // Demo mode Google login (fake accounts)
+  const handleDemoGoogleLogin = (account: (typeof GOOGLE_ACCOUNTS)[0]) => {
     setGoogleAccount(account);
+    // Save email for profile display
+    localStorage.setItem("fooddash_login_email", account.email);
+    localStorage.removeItem("fooddash_login_phone");
     toast.success(`Signing in as ${account.name}...`);
     setTimeout(() => login(), 600);
   };
@@ -364,7 +562,28 @@ export function AuthScreen() {
                   onClick={() => setStep("google_picker")}
                   data-ocid="auth.google_button"
                 >
-                  <span className="mr-2 text-lg leading-none">🎨</span>
+                  <svg
+                    className="mr-2 h-4 w-4"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                      fill="#4285F4"
+                    />
+                    <path
+                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                      fill="#34A853"
+                    />
+                    <path
+                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+                      fill="#FBBC05"
+                    />
+                    <path
+                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                      fill="#EA4335"
+                    />
+                  </svg>
                   Sign In with Google
                 </Button>
               </motion.div>
@@ -447,94 +666,157 @@ export function AuthScreen() {
                 exit={{ opacity: 0, x: -20 }}
                 className="space-y-4"
               >
-                <div className="text-center p-3 rounded-xl bg-success/10 border border-success/20">
-                  <p className="text-sm font-semibold text-success">
-                    OTP Sent!
-                  </p>
-                  <p className="text-xs text-success/80 mt-0.5">
-                    Check your SMS on +91 {phone} for the 6-digit code
-                  </p>
-                </div>
+                {isWidgetMode ? (
+                  /* ── Widget mode UI ── */
+                  <>
+                    <div className="text-center p-4 rounded-xl bg-primary/10 border border-primary/20 space-y-2">
+                      <div className="flex items-center justify-center gap-2">
+                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                        <p className="text-sm font-semibold text-primary">
+                          Verification in Progress
+                        </p>
+                      </div>
+                      <p className="text-xs text-primary/80 leading-snug">
+                        MSG91 Widget is active. Complete the OTP verification in
+                        the popup that appeared.
+                      </p>
+                    </div>
 
-                {isDemoMode && (
-                  <div className="flex items-center gap-2 p-3 rounded-xl bg-warning/10 border border-warning/20">
-                    <span className="text-base">⚠️</span>
-                    <p className="text-xs text-warning/90 leading-snug">
-                      Running in <strong>demo mode</strong> — SMS not sent.
-                      Configure MSG91 in Admin → SMS Config for real OTPs.
-                    </p>
-                  </div>
-                )}
+                    {widgetAccessToken ? (
+                      <Button
+                        className="w-full h-11 gradient-food border-0 text-white font-semibold"
+                        onClick={handleManualWidgetVerify}
+                        disabled={isLoggingIn || isVerifyingOtp}
+                        data-ocid="auth.widget_verify_button"
+                      >
+                        {isLoggingIn || isVerifyingOtp ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Verifying...
+                          </>
+                        ) : (
+                          "Verify Access Token"
+                        )}
+                      </Button>
+                    ) : (
+                      <div
+                        className="text-center py-2"
+                        data-ocid="auth.widget_verify_button"
+                      >
+                        <p className="text-xs text-muted-foreground">
+                          Waiting for widget to complete…
+                        </p>
+                      </div>
+                    )}
 
-                <div>
-                  <Label className="text-sm font-medium mb-2 block">
-                    Enter OTP
-                  </Label>
-                  {/* 6-cell individual digit input */}
-                  <div className="flex gap-2 justify-center">
-                    {([0, 1, 2, 3, 4, 5] as const).map((pos) => (
-                      <OtpCell
-                        key={pos}
-                        pos={pos}
-                        value={otpDigits[pos]}
-                        otpRefs={otpRefs}
-                        otpDigits={otpDigits}
-                        setOtpDigits={setOtpDigits}
-                        onComplete={handleVerifyOtp}
-                      />
-                    ))}
-                  </div>
-                </div>
-
-                {/* Resend OTP button with cooldown */}
-                <div className="text-center">
-                  {resendCooldown > 0 ? (
-                    <p className="text-xs text-muted-foreground">
-                      Resend in{" "}
-                      <span className="font-semibold text-foreground">
-                        {resendCooldown}s
-                      </span>
-                    </p>
-                  ) : (
                     <button
                       type="button"
-                      onClick={handleResendOtp}
-                      disabled={isSendingOtp}
-                      className="text-xs text-primary hover:text-primary/80 font-semibold transition-colors disabled:opacity-50"
-                      data-ocid="auth.resend_otp_button"
+                      onClick={() => {
+                        setStep("mobile_phone");
+                        setWidgetAccessToken(null);
+                      }}
+                      className="text-xs text-muted-foreground hover:text-foreground transition-colors w-full text-center"
                     >
-                      {isSendingOtp ? "Sending..." : "Resend OTP"}
+                      ← Change number
                     </button>
-                  )}
-                </div>
+                  </>
+                ) : (
+                  /* ── Demo mode UI ── */
+                  <>
+                    {/* Clean single info box for demo mode */}
+                    <div className="p-3 rounded-xl bg-primary/10 border border-primary/20">
+                      <div className="flex items-start gap-2">
+                        <span className="text-base leading-none mt-0.5">
+                          📱
+                        </span>
+                        <div>
+                          <p className="text-sm font-semibold text-primary">
+                            Demo Mode
+                          </p>
+                          <p className="text-xs text-primary/80 leading-snug mt-0.5">
+                            OTP messages are not sent via SMS in demo mode.
+                            Enter any 6-digit code to continue.{" "}
+                            <span className="text-primary/60">
+                              Configure MSG91 in Admin → Integrations for real
+                              OTP.
+                            </span>
+                          </p>
+                        </div>
+                      </div>
+                    </div>
 
-                <Button
-                  className="w-full h-11 gradient-food border-0 text-white font-semibold"
-                  onClick={handleVerifyOtp}
-                  disabled={isLoggingIn || isVerifyingOtp || otp.length < 6}
-                  data-ocid="auth.verify_otp_button"
-                >
-                  {isLoggingIn || isVerifyingOtp ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Verifying...
-                    </>
-                  ) : (
-                    "Verify & Sign In"
-                  )}
-                </Button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setStep("mobile_phone");
-                    setOtpDigits(["", "", "", "", "", ""]);
-                    if (cooldownRef.current) clearInterval(cooldownRef.current);
-                    setResendCooldown(0);
-                  }}
-                  className="text-xs text-muted-foreground hover:text-foreground transition-colors w-full text-center"
-                >
-                  ← Change number
-                </button>
+                    <div>
+                      <Label className="text-sm font-medium mb-2 block">
+                        Enter OTP
+                      </Label>
+                      {/* 6-cell individual digit input */}
+                      <div className="flex gap-2 justify-center">
+                        {([0, 1, 2, 3, 4, 5] as const).map((pos) => (
+                          <OtpCell
+                            key={pos}
+                            pos={pos}
+                            value={otpDigits[pos]}
+                            otpRefs={otpRefs}
+                            otpDigits={otpDigits}
+                            setOtpDigits={setOtpDigits}
+                            onComplete={handleVerifyOtp}
+                          />
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Resend OTP button with cooldown */}
+                    <div className="text-center">
+                      {resendCooldown > 0 ? (
+                        <p className="text-xs text-muted-foreground">
+                          Resend in{" "}
+                          <span className="font-semibold text-foreground">
+                            {resendCooldown}s
+                          </span>
+                        </p>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleResendOtp}
+                          disabled={isSendingOtp}
+                          className="text-xs text-primary hover:text-primary/80 font-semibold transition-colors disabled:opacity-50"
+                          data-ocid="auth.resend_otp_button"
+                        >
+                          {isSendingOtp ? "Sending..." : "Resend OTP"}
+                        </button>
+                      )}
+                    </div>
+
+                    <Button
+                      className="w-full h-11 gradient-food border-0 text-white font-semibold"
+                      onClick={handleVerifyOtp}
+                      disabled={isLoggingIn || isVerifyingOtp || otp.length < 6}
+                      data-ocid="auth.verify_otp_button"
+                    >
+                      {isLoggingIn || isVerifyingOtp ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Verifying...
+                        </>
+                      ) : (
+                        "Verify & Sign In"
+                      )}
+                    </Button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStep("mobile_phone");
+                        setOtpDigits(["", "", "", "", "", ""]);
+                        if (cooldownRef.current)
+                          clearInterval(cooldownRef.current);
+                        setResendCooldown(0);
+                      }}
+                      className="text-xs text-muted-foreground hover:text-foreground transition-colors w-full text-center"
+                    >
+                      ← Change number
+                    </button>
+                  </>
+                )}
               </motion.div>
             )}
 
@@ -547,37 +829,128 @@ export function AuthScreen() {
                 exit={{ opacity: 0, x: -20 }}
                 className="space-y-3"
               >
-                <p className="text-sm text-muted-foreground text-center mb-2">
-                  Choose a Google account
-                </p>
-                {GOOGLE_ACCOUNTS.map((account) => (
-                  <button
-                    key={account.email}
-                    type="button"
-                    onClick={() => handleGoogleLogin(account)}
-                    disabled={isLoggingIn}
-                    data-ocid="auth.google_account_button"
-                    className="w-full flex items-center gap-3 p-3 rounded-xl border border-border bg-card hover:bg-secondary transition-colors"
-                  >
-                    <div className="w-10 h-10 rounded-full gradient-food flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
-                      {account.avatar}
-                    </div>
-                    <div className="text-left min-w-0">
-                      <p className="font-semibold text-sm truncate">
-                        {account.name}
-                      </p>
-                      <p className="text-xs text-muted-foreground truncate">
-                        {account.email}
-                      </p>
-                    </div>
-                    {isLoggingIn && googleAccount?.email === account.email && (
-                      <Loader2 className="h-4 w-4 animate-spin ml-auto flex-shrink-0 text-muted-foreground" />
+                {isGoogleRealMode ? (
+                  /* ── Real Google OAuth (GSI) UI ── */
+                  <>
+                    {gsiSigningIn && googleAccount ? (
+                      /* Signed-in confirmation card */
+                      <div className="flex flex-col items-center gap-3 py-4">
+                        <div className="w-16 h-16 rounded-full gradient-food flex items-center justify-center text-white font-bold text-xl">
+                          {googleAccount.picture ? (
+                            <img
+                              src={googleAccount.picture}
+                              alt={googleAccount.name}
+                              className="w-16 h-16 rounded-full object-cover"
+                            />
+                          ) : (
+                            googleAccount.avatar
+                          )}
+                        </div>
+                        <div className="text-center">
+                          <p className="font-semibold text-sm">
+                            {googleAccount.name}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {googleAccount.email}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 text-primary text-xs font-medium">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          Signing in...
+                        </div>
+                      </div>
+                    ) : gsiLoading ? (
+                      /* Loading spinner while GSI initializes */
+                      <div className="flex flex-col items-center gap-3 py-6">
+                        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                        <p className="text-sm text-muted-foreground">
+                          Loading Google Sign-In...
+                        </p>
+                      </div>
+                    ) : (
+                      /* GSI ready — show "Continue with Google" button */
+                      <div className="space-y-3 py-2">
+                        <p className="text-sm text-muted-foreground text-center">
+                          Sign in with your Google account
+                        </p>
+                        <Button
+                          variant="outline"
+                          className="w-full h-12 font-semibold border-border bg-card hover:bg-secondary"
+                          onClick={handleGsiPrompt}
+                          disabled={!gsiReady || isLoggingIn}
+                          data-ocid="auth.google_continue_button"
+                        >
+                          <svg
+                            className="mr-2 h-4 w-4"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                          >
+                            <path
+                              d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                              fill="#4285F4"
+                            />
+                            <path
+                              d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                              fill="#34A853"
+                            />
+                            <path
+                              d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+                              fill="#FBBC05"
+                            />
+                            <path
+                              d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                              fill="#EA4335"
+                            />
+                          </svg>
+                          Continue with Google
+                        </Button>
+                      </div>
                     )}
-                  </button>
-                ))}
+                  </>
+                ) : (
+                  /* ── Demo mode: fake Google accounts ── */
+                  <>
+                    <p className="text-sm text-muted-foreground text-center mb-2">
+                      Choose a Google account
+                    </p>
+                    {GOOGLE_ACCOUNTS.map((account) => (
+                      <button
+                        key={account.email}
+                        type="button"
+                        onClick={() => handleDemoGoogleLogin(account)}
+                        disabled={isLoggingIn}
+                        data-ocid="auth.google_account_button"
+                        className="w-full flex items-center gap-3 p-3 rounded-xl border border-border bg-card hover:bg-secondary transition-colors"
+                      >
+                        <div className="w-10 h-10 rounded-full gradient-food flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
+                          {account.avatar}
+                        </div>
+                        <div className="text-left min-w-0">
+                          <p className="font-semibold text-sm truncate">
+                            {account.name}
+                          </p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {account.email}
+                          </p>
+                        </div>
+                        {isLoggingIn &&
+                          googleAccount?.email === account.email && (
+                            <Loader2 className="h-4 w-4 animate-spin ml-auto flex-shrink-0 text-muted-foreground" />
+                          )}
+                      </button>
+                    ))}
+                  </>
+                )}
+
                 <button
                   type="button"
-                  onClick={() => setStep("options")}
+                  onClick={() => {
+                    setStep("options");
+                    setGsiReady(false);
+                    setGsiLoading(false);
+                    setGsiSigningIn(false);
+                    setGoogleAccount(null);
+                  }}
                   className="text-xs text-muted-foreground hover:text-foreground transition-colors w-full text-center pt-1"
                   data-ocid="auth.back_button"
                 >

@@ -23,8 +23,10 @@ import {
   Bike,
   Eye,
   EyeOff,
+  Globe,
   MessageSquare,
   Package,
+  Settings2,
   ShieldCheck,
   ShoppingBag,
   Store,
@@ -154,11 +156,29 @@ export function AdminApp() {
   const [smsApiKey, setSmsApiKey] = useState(
     () => localStorage.getItem("fooddash_sms_api_key") ?? "",
   );
-  const [smsTemplateId, setSmsTemplateId] = useState(
-    () => localStorage.getItem("fooddash_sms_template_id") ?? "",
+  const [widgetId, setWidgetId] = useState(
+    () => localStorage.getItem("fooddash_msg91_widget_id") ?? "",
   );
   const [showApiKey, setShowApiKey] = useState(false);
   const isSmConfigured = !!localStorage.getItem("fooddash_sms_api_key");
+
+  // Google OAuth config state
+  const [googleClientId, setGoogleClientId] = useState(
+    () => localStorage.getItem("fooddash_google_client_id") ?? "",
+  );
+  const [showGoogleClientId, setShowGoogleClientId] = useState(false);
+  const isGoogleConfigured = !!localStorage.getItem(
+    "fooddash_google_client_id",
+  );
+
+  const handleSaveGoogleOauth = () => {
+    if (googleClientId.trim()) {
+      localStorage.setItem("fooddash_google_client_id", googleClientId.trim());
+    } else {
+      localStorage.removeItem("fooddash_google_client_id");
+    }
+    toast.success("Google OAuth configuration saved");
+  };
 
   const handleSaveSmsConfig = () => {
     if (smsApiKey.trim()) {
@@ -166,10 +186,10 @@ export function AdminApp() {
     } else {
       localStorage.removeItem("fooddash_sms_api_key");
     }
-    if (smsTemplateId.trim()) {
-      localStorage.setItem("fooddash_sms_template_id", smsTemplateId.trim());
+    if (widgetId.trim()) {
+      localStorage.setItem("fooddash_msg91_widget_id", widgetId.trim());
     } else {
-      localStorage.removeItem("fooddash_sms_template_id");
+      localStorage.removeItem("fooddash_msg91_widget_id");
     }
     toast.success("SMS configuration saved");
   };
@@ -338,8 +358,8 @@ export function AdminApp() {
             className="text-xs"
             data-ocid="admin.sms_config_tab"
           >
-            <MessageSquare className="h-3.5 w-3.5 mr-1" />
-            SMS
+            <Settings2 className="h-3.5 w-3.5 mr-1" />
+            Integrations
           </TabsTrigger>
         </TabsList>
 
@@ -601,10 +621,10 @@ export function AdminApp() {
           </div>
         </TabsContent>
 
-        {/* SMS Config Tab */}
+        {/* Integrations Tab (was: SMS Config Tab) */}
         <TabsContent value="sms">
           <div className="space-y-4">
-            {/* Status badge */}
+            {/* ── MSG91 Section ── */}
             <div className="flex items-center justify-between">
               <h3 className="font-display font-bold text-base flex items-center gap-2">
                 <MessageSquare className="h-4 w-4 text-primary" />
@@ -673,23 +693,23 @@ export function AdminApp() {
               </p>
             </div>
 
-            {/* MSG91 Template ID */}
+            {/* MSG91 Widget ID */}
             <div className="space-y-1.5">
-              <Label htmlFor="sms-template-id" className="text-sm font-medium">
-                OTP Template ID
+              <Label htmlFor="sms-widget-id" className="text-sm font-medium">
+                MSG91 Widget ID
               </Label>
               <Input
-                id="sms-template-id"
+                id="sms-widget-id"
                 type="text"
-                placeholder="Enter your MSG91 template ID"
-                value={smsTemplateId}
-                onChange={(e) => setSmsTemplateId(e.target.value)}
+                placeholder="Enter your MSG91 Widget ID"
+                value={widgetId}
+                onChange={(e) => setWidgetId(e.target.value)}
                 className="bg-card border-border"
-                data-ocid="admin.sms_template_input"
+                data-ocid="admin.sms_widget_id_input"
               />
               <p className="text-[10px] text-muted-foreground">
-                Create an OTP template in your MSG91 dashboard and paste the ID
-                here.
+                Create an OTP widget in your MSG91 dashboard and paste the
+                Widget ID here.
               </p>
             </div>
 
@@ -700,12 +720,12 @@ export function AdminApp() {
               data-ocid="admin.sms_config_save_button"
             >
               <MessageSquare className="mr-2 h-4 w-4" />
-              Save Config
+              Save SMS Config
             </Button>
 
             {/* Quick guide */}
             <div className="p-3 rounded-xl bg-card border border-border space-y-2">
-              <p className="text-xs font-semibold">Quick Setup Guide</p>
+              <p className="text-xs font-semibold">MSG91 Quick Setup Guide</p>
               <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
                 <li>
                   Sign up at{" "}
@@ -718,10 +738,117 @@ export function AdminApp() {
                     msg91.com
                   </a>
                 </li>
-                <li>Go to API → Auth Key and copy your key</li>
-                <li>Create an OTP template and note the Template ID</li>
+                <li>Go to OTP Widget section and create a new widget</li>
+                <li>Copy your Auth Key from API → Auth Key</li>
+                <li>Copy your Widget ID from the widget settings</li>
                 <li>Paste both values above and click Save</li>
-                <li>Users will now receive real OTPs via SMS</li>
+                <li>Users will now see the MSG91 OTP widget on login</li>
+              </ol>
+            </div>
+
+            {/* ── Divider ── */}
+            <div className="flex items-center gap-3 py-1">
+              <div className="flex-1 h-px bg-border" />
+              <span className="text-xs text-muted-foreground font-medium">
+                Google OAuth
+              </span>
+              <div className="flex-1 h-px bg-border" />
+            </div>
+
+            {/* ── Google OAuth Section ── */}
+            <div className="flex items-center justify-between">
+              <h3 className="font-display font-bold text-base flex items-center gap-2">
+                <Globe className="h-4 w-4 text-primary" />
+                Google Sign-In
+              </h3>
+              <Badge
+                variant="outline"
+                className={
+                  isGoogleConfigured
+                    ? "border-success/40 text-success text-[10px]"
+                    : "border-warning/40 text-warning text-[10px]"
+                }
+              >
+                {isGoogleConfigured ? "✓ Configured" : "Demo Mode"}
+              </Badge>
+            </div>
+
+            <div className="p-3 rounded-xl bg-muted/60 border border-border">
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Enable real Google OAuth login. Users will see Google One-Tap or
+                the Google sign-in popup. Without a Client ID, the app uses demo
+                mode with sample accounts.
+              </p>
+            </div>
+
+            {/* Google Client ID input */}
+            <div className="space-y-1.5">
+              <Label htmlFor="google-client-id" className="text-sm font-medium">
+                Google Client ID
+              </Label>
+              <div className="relative">
+                <Input
+                  id="google-client-id"
+                  type={showGoogleClientId ? "text" : "password"}
+                  placeholder="xxxxxxxx.apps.googleusercontent.com"
+                  value={googleClientId}
+                  onChange={(e) => setGoogleClientId(e.target.value)}
+                  className="bg-card border-border pr-10"
+                  data-ocid="admin.google_client_id_input"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowGoogleClientId((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  aria-label={
+                    showGoogleClientId ? "Hide Client ID" : "Show Client ID"
+                  }
+                >
+                  {showGoogleClientId ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                Stored locally in your browser. Never sent to any server.
+              </p>
+            </div>
+
+            {/* Save Google OAuth button */}
+            <Button
+              className="w-full h-11 gradient-food border-0 text-white font-semibold"
+              onClick={handleSaveGoogleOauth}
+              data-ocid="admin.google_oauth_save_button"
+            >
+              <Globe className="mr-2 h-4 w-4" />
+              Save OAuth Config
+            </Button>
+
+            {/* Google OAuth quick guide */}
+            <div className="p-3 rounded-xl bg-card border border-border space-y-2">
+              <p className="text-xs font-semibold">Google OAuth Quick Setup</p>
+              <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
+                <li>
+                  Go to{" "}
+                  <a
+                    href="https://console.cloud.google.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    console.cloud.google.com
+                  </a>
+                </li>
+                <li>Create a project → APIs &amp; Services → Credentials</li>
+                <li>Create OAuth 2.0 Client ID → Web application</li>
+                <li>
+                  Add your app domain to{" "}
+                  <strong>Authorized JavaScript origins</strong>
+                </li>
+                <li>Copy the Client ID and paste above</li>
+                <li>Users will now sign in with their real Google account</li>
               </ol>
             </div>
           </div>

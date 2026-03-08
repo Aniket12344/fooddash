@@ -10,24 +10,19 @@ import {
   ArrowLeftRight,
   Bike,
   ChevronDown,
-  LogOut,
   ShieldCheck,
   ShoppingBag,
   Store,
   Utensils,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { AppUserRole } from "./backend.d";
-import { AuthScreen } from "./components/AuthScreen";
-import { LoadingSpinner } from "./components/LoadingSpinner";
 import { RoleSelector } from "./components/RoleSelector";
 import { AdminApp } from "./components/admin/AdminApp";
 import { CustomerApp } from "./components/customer/CustomerApp";
 import { RestaurantApp } from "./components/restaurant/RestaurantApp";
 import { RiderApp } from "./components/rider/RiderApp";
-import { useInternetIdentity } from "./hooks/useInternetIdentity";
-import { useCallerUserProfile } from "./hooks/useQueries";
 
 type ActiveRole = AppUserRole | "admin";
 
@@ -42,47 +37,8 @@ const ROLE_LABELS: Record<
 };
 
 export default function App() {
-  const { identity, isInitializing, clear, isLoginSuccess, isLoginIdle } =
-    useInternetIdentity();
-  const isAuthenticated = !!identity;
-
-  const { data: profile, isLoading: isLoadingProfile } = useCallerUserProfile();
-
   const [activeRole, setActiveRole] = useState<ActiveRole | null>(null);
   const [showRoleSelector, setShowRoleSelector] = useState(false);
-
-  // Sync role from loaded profile
-  useEffect(() => {
-    if (profile && !activeRole) {
-      setActiveRole(profile.role);
-    }
-  }, [profile, activeRole]);
-
-  // Show login if not authenticated and not initializing
-  if (isInitializing) {
-    return (
-      <LoadingSpinner message="Initializing..." className="min-h-screen" />
-    );
-  }
-
-  if (!isAuthenticated && (isLoginIdle || !isLoginSuccess)) {
-    return (
-      <>
-        <AuthScreen />
-        <Toaster richColors position="top-center" />
-      </>
-    );
-  }
-
-  // Show loading while profile is being fetched
-  if (isLoadingProfile && isAuthenticated) {
-    return (
-      <LoadingSpinner
-        message="Loading your profile..."
-        className="min-h-screen"
-      />
-    );
-  }
 
   // Show role selector if no role set or switching
   if (!activeRole || showRoleSelector) {
@@ -117,7 +73,7 @@ export default function App() {
             </span>
           </div>
 
-          {/* User menu */}
+          {/* Role switcher */}
           <div className="flex items-center gap-2">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -143,14 +99,6 @@ export default function App() {
                 >
                   <ArrowLeftRight className="h-4 w-4 text-primary" />
                   Switch Role
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={clear}
-                  className="gap-2 cursor-pointer text-destructive focus:text-destructive"
-                  data-ocid="auth.logout_button"
-                >
-                  <LogOut className="h-4 w-4" />
-                  Sign Out
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
