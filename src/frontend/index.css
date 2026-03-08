@@ -1,0 +1,149 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@font-face {
+  font-family: "Bricolage Grotesque";
+  src: url("/assets/fonts/BricolageGrotesque.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Outfit";
+  src: url("/assets/fonts/Outfit.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@layer base {
+  :root {
+    --radius: 0.875rem;
+
+    /* FoodDash light theme — clean white with vivid red primary */
+    --background: 0.98 0.004 85;
+    --foreground: 0.15 0.01 270;
+    --card: 1.0 0 0;
+    --card-foreground: 0.15 0.01 270;
+    --popover: 1.0 0 0;
+    --popover-foreground: 0.15 0.01 270;
+
+    /* Vivid red primary (like Swiggy/Zomato) */
+    --primary: 0.53 0.25 27;
+    --primary-foreground: 1.0 0 0;
+
+    /* Secondary - light gray */
+    --secondary: 0.95 0.005 270;
+    --secondary-foreground: 0.2 0.01 270;
+
+    --muted: 0.93 0.005 270;
+    --muted-foreground: 0.5 0.01 270;
+
+    /* Warm accent */
+    --accent: 0.96 0.008 60;
+    --accent-foreground: 0.15 0.01 270;
+
+    /* Destructive - vivid red */
+    --destructive: 0.53 0.25 27;
+    --destructive-foreground: 1.0 0 0;
+
+    /* Success - fresh green */
+    --success: 0.55 0.17 145;
+    --success-foreground: 1.0 0 0;
+
+    /* Warning - golden yellow */
+    --warning: 0.72 0.17 75;
+    --warning-foreground: 0.1 0.01 85;
+
+    --border: 0.88 0.008 270;
+    --input: 0.9 0.006 270;
+    --ring: 0.53 0.25 27;
+
+    /* Status badge colors */
+    --status-pending: 0.72 0.17 75;
+    --status-accepted: 0.55 0.18 210;
+    --status-preparing: 0.65 0.19 55;
+    --status-ready: 0.55 0.17 145;
+    --status-pickedup: 0.55 0.18 280;
+    --status-delivered: 0.5 0.14 145;
+    --status-cancelled: 0.5 0.2 27;
+
+    --chart-1: 0.53 0.25 27;
+    --chart-2: 0.55 0.17 145;
+    --chart-3: 0.65 0.19 55;
+    --chart-4: 0.55 0.18 210;
+    --chart-5: 0.55 0.18 280;
+    --sidebar: 0.97 0.004 85;
+    --sidebar-foreground: 0.15 0.01 270;
+    --sidebar-primary: 0.53 0.25 27;
+    --sidebar-primary-foreground: 1.0 0 0;
+    --sidebar-accent: 0.93 0.005 270;
+    --sidebar-accent-foreground: 0.2 0.01 270;
+    --sidebar-border: 0.88 0.008 270;
+    --sidebar-ring: 0.53 0.25 27;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-body antialiased;
+    min-height: 100vh;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display;
+  }
+}
+
+@layer utilities {
+  .font-display {
+    font-family: "Bricolage Grotesque", "Plus Jakarta Sans", sans-serif;
+  }
+  .font-body {
+    font-family: "Outfit", "Plus Jakarta Sans", sans-serif;
+  }
+
+  .glass-card {
+    backdrop-filter: blur(12px);
+    background: oklch(var(--card) / 0.92);
+    border: 1px solid oklch(var(--border) / 0.8);
+  }
+
+  .tab-bar {
+    background: oklch(var(--card));
+    border-top: 1px solid oklch(var(--border));
+    box-shadow: 0 -4px 16px -2px rgba(0, 0, 0, 0.06);
+  }
+
+  .gradient-food {
+    background: linear-gradient(135deg, oklch(0.53 0.25 27), oklch(0.45 0.22 20));
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .card-hover {
+    @apply transition-all duration-200 hover:scale-[1.01] hover:shadow-md;
+  }
+
+  .status-pending { background: oklch(var(--status-pending) / 0.12); color: oklch(var(--status-pending)); border-color: oklch(var(--status-pending) / 0.3); }
+  .status-accepted { background: oklch(var(--status-accepted) / 0.12); color: oklch(var(--status-accepted)); border-color: oklch(var(--status-accepted) / 0.3); }
+  .status-preparing { background: oklch(var(--status-preparing) / 0.12); color: oklch(var(--status-preparing)); border-color: oklch(var(--status-preparing) / 0.3); }
+  .status-readyForPickup { background: oklch(var(--status-ready) / 0.12); color: oklch(var(--status-ready)); border-color: oklch(var(--status-ready) / 0.3); }
+  .status-pickedUp { background: oklch(var(--status-pickedup) / 0.12); color: oklch(var(--status-pickedup)); border-color: oklch(var(--status-pickedup) / 0.3); }
+  .status-delivered { background: oklch(var(--status-delivered) / 0.12); color: oklch(var(--status-delivered)); border-color: oklch(var(--status-delivered) / 0.3); }
+  .status-cancelled { background: oklch(var(--status-cancelled) / 0.12); color: oklch(var(--status-cancelled)); border-color: oklch(var(--status-cancelled) / 0.3); }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
